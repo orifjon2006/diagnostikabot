@@ -173,6 +173,14 @@ async def get_number_handler(message: types.Message):
         if not operator or not operator.is_approved or operator.is_banned:
             return await message.answer("⚠️ Sizga raqam olish huquqi berilmagan.")
             
+        # 🆕 YANGI QO'SHILGAN QISM: Agar admin operatorni vaqtincha to'xtatgan bo'lsa
+        if operator.is_paused:
+            return await message.answer(
+                "⏸ <b>Sizga raqam tarqatish admin tomonidan vaqtincha to'xtatib qo'yilgan!</b>\n"
+                "Iltimos, ruxsat berilishini kuting.", 
+                parse_mode="HTML"
+            )
+            
     # 3. BAZADAN YANGI MIJOZNI OLAMIZ
     client_data = await get_number_for_operator(message.from_user.id)
     
