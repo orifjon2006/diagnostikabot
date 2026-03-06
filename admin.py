@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from aiogram import Router, F, types
 from aiogram.filters import Command
 from aiogram.types import FSInputFile, ReplyKeyboardMarkup, KeyboardButton
@@ -46,23 +46,23 @@ async def admin_start(message: types.Message):
     )
 
 # ==========================================
-# 🚦 RAQAM TARQATISHNI BOSHQARISH
+# 🚦 UMUMIY RAQAM TARQATISHNI BOSHQARISH
 # ==========================================
 @admin_router.message(F.text.in_(["▶️ Tarqatishni boshlash", "⏸ Tarqatishni to'xtatish"]))
 async def toggle_dist_handler(message: types.Message):
-    """Admin tomonidan raqam tarqatish tizimini yoqish yoki o'chirish"""
+    """Admin tomonidan umumiy raqam tarqatish tizimini yoqish yoki o'chirish"""
     new_status = await toggle_distribution_status()
-    kb = await get_admin_kb() # Klaviatura yangilanadi
+    kb = await get_admin_kb() # Klaviatura holatga qarab yangilanadi
     
     if new_status:
         await message.answer(
-            "✅ <b>Raqam tarqatish boshlandi!</b>\nEndi operatorlar mijoz raqamlarini olishi mumkin.", 
+            "✅ <b>Umumiy raqam tarqatish boshlandi!</b>\nEndi operatorlar mijoz raqamlarini olishi mumkin.", 
             reply_markup=kb, 
             parse_mode="HTML"
         )
     else:
         await message.answer(
-            "⏸ <b>Raqam tarqatish to'xtatildi!</b>\nOperatorlar vaqtincha yangi raqam ola bilmaydi.", 
+            "⏸ <b>Umumiy raqam tarqatish to'xtatildi!</b>\nOperatorlar vaqtincha yangi raqam ola bilmaydi.", 
             reply_markup=kb, 
             parse_mode="HTML"
         )
@@ -138,7 +138,7 @@ async def process_reject(callback: types.CallbackQuery):
     await callback.answer()
 
 # ==========================================
-# 👥 OPERATORLAR RO'YXATI VA BAN TIZIMI
+# 👥 OPERATORLAR RO'YXATI VA SHAXSIY CHEKLOVLAR
 # ==========================================
 @admin_router.message(F.text == "👥 Operatorlar ro'yxati")
 async def operators_list(message: types.Message):
@@ -151,23 +151,40 @@ async def operators_list(message: types.Message):
             return await message.answer("Bazada tasdiqlangan operatorlar yo'q.")
             
         for op in operators:
-            status = "🔴 BAN qilingan" if op.is_banned else "🟢 Faol"
+            # 1. Operator holatini aniqlaymiz
+            if op.is_banned:
+                status = "🔴 BAN qilingan"
+            elif op.is_paused:
+                status = "⏸ Tarqatish to'xtatilgan"
+            else:
+                status = "🟢 Faol"
             
             builder = InlineKeyboardBuilder()
+            
+            # 2. Ban / Unban tugmalari
             if op.is_banned:
                 builder.button(text="🔓 Bandan olish", callback_data=f"unban_{op.tg_id}")
             else:
                 builder.button(text="🚫 Ban qilish", callback_data=f"ban_{op.tg_id}")
                 
+                # 3. Shaxsiy Tarqatishni yoqish / o'chirish tugmalari (faqat ban bo'lmaganlarga chiqadi)
+                if getattr(op, 'is_paused', False):
+                    builder.button(text="▶️ Raqam berishni yoqish", callback_data=f"playop_{op.tg_id}")
+                else:
+                    builder.button(text="⏸ Raqam berishni to'xtatish", callback_data=f"pauseop_{op.tg_id}")
+            
+            builder.adjust(1) # Tugmalarni ustma-ust teramiz
+                
             text = (
-                f"👤 <b>{op.name}</b> | Status: {status}\n"
+                f"👤 <b>{op.name}</b>\n"
+                f"📊 Status: {status}\n"
                 f"📞 {op.phone} | 🆔 <code>{op.tg_id}</code>"
             )
             await message.answer(text, reply_markup=builder.as_markup(), parse_mode="HTML")
 
+# --- BAN LOGIKASI ---
 @admin_router.callback_query(F.data.startswith("ban_"))
 async def process_ban(callback: types.CallbackQuery):
-    """Operatorni bloklash (Ban)"""
     op_id = int(callback.data.split("_")[1])
     async with AsyncSessionLocal() as session:
         operator = await session.get(Operator, op_id)
@@ -179,7 +196,6 @@ async def process_ban(callback: types.CallbackQuery):
 
 @admin_router.callback_query(F.data.startswith("unban_"))
 async def process_unban(callback: types.CallbackQuery):
-    """Operatorni blokdan chiqarish (Unban)"""
     op_id = int(callback.data.split("_")[1])
     async with AsyncSessionLocal() as session:
         operator = await session.get(Operator, op_id)
@@ -187,6 +203,29 @@ async def process_unban(callback: types.CallbackQuery):
             operator.is_banned = False
             await session.commit()
             await callback.message.edit_text(f"🔓 <b>{operator.name}</b> bandan olindi!", parse_mode="HTML")
+    await callback.answer()
+
+# --- SHAXSIY TARQATISHNI TO'XTATISH/YOQISH LOGIKASI ---
+@admin_router.callback_query(F.data.startswith("pauseop_"))
+async def process_pause_op(callback: types.CallbackQuery):
+    op_id = int(callback.data.split("_")[1])
+    async with AsyncSessionLocal() as session:
+        operator = await session.get(Operator, op_id)
+        if operator:
+            operator.is_paused = True
+            await session.commit()
+            await callback.message.edit_text(f"⏸ <b>{operator.name}</b> uchun raqam berish vaqtincha to'xtatildi!", parse_mode="HTML")
+    await callback.answer()
+
+@admin_router.callback_query(F.data.startswith("playop_"))
+async def process_play_op(callback: types.CallbackQuery):
+    op_id = int(callback.data.split("_")[1])
+    async with AsyncSessionLocal() as session:
+        operator = await session.get(Operator, op_id)
+        if operator:
+            operator.is_paused = False
+            await session.commit()
+            await callback.message.edit_text(f"▶️ <b>{operator.name}</b> uchun raqam berish qayta yoqildi!", parse_mode="HTML")
     await callback.answer()
 
 # ==========================================
@@ -213,7 +252,7 @@ async def show_statistics(message: types.Message):
             f"📅 <b>Bugungi statistika:</b>\n"
             f" ├ Yangi kelgan raqamlar: {today_nums or 0} ta\n"
             f" ├ Operatorlar olgan raqamlar: {today_assigned or 0} ta\n"
-            f" └ Muaffaqiyatli qilingan bronlar: {today_bookings or 0} ta\n"
+            f" └ Muvaffaqiyatli qilingan bronlar: {today_bookings or 0} ta\n"
         )
         
         await message.answer(text, parse_mode="HTML")
@@ -249,6 +288,7 @@ async def process_excel_export(callback: types.CallbackQuery):
                 document=excel_doc,
                 caption=f"📁 {period.capitalize()} Excel hisoboti tayyor!"
             )
+            # Serverda joyni tejash uchun yuborib bo'lgach o'chiramiz
             os.remove(file_path) 
             await callback.message.delete()
         else:
