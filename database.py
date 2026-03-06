@@ -21,6 +21,9 @@ class Operator(Base):
     is_approved: Mapped[bool] = mapped_column(Boolean, default=False)
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    is_paused: Mapped[bool] = mapped_column(Boolean, default=False) 
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 class PhoneNumber(Base):
     __tablename__ = 'phone_numbers'
