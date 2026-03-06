@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import String, DateTime, BigInteger, Boolean, select, and_
+from sqlalchemy import String, DateTime, BigInteger, Boolean, select, and_, update
 import config
 
 engine = create_async_engine(config.DB_URL, echo=False)
@@ -86,19 +86,34 @@ async def add_phone_number(number: str, client_name: str = None, location: str =
             await session.commit()
 
 async def get_number_for_operator(operator_id: int):
+    """Tranzaksiya va qulflarsiz xavfsiz raqam ajratish (Optimistic Locking)"""
     async with AsyncSessionLocal() as session:
-        async with session.begin():
-            stmt = select(PhoneNumber).where(PhoneNumber.status == "new")\
-                .order_by(PhoneNumber.created_at).limit(1).with_for_update(skip_locked=True)
-            result = await session.execute(stmt)
-            phone = result.scalar_one_or_none()
-            if phone:
+        # 1. Baza qulf qilinmaydi, shunchaki eng eski raqamni o'qiymiz
+        stmt = select(PhoneNumber).where(PhoneNumber.status == "new").order_by(PhoneNumber.created_at).limit(1)
+        result = await session.execute(stmt)
+        phone = result.scalar_one_or_none()
+        
+        if phone:
+            # 2. Raqamni olgach, faqat statusi rostan ham "new" bo'lib turgandagina update qilamiz
+            update_stmt = (
+                update(PhoneNumber)
+                .where(and_(PhoneNumber.id == phone.id, PhoneNumber.status == "new"))
+                .values(status="assigned", operator_id=operator_id, updated_at=datetime.utcnow())
+            )
+            res = await session.execute(update_stmt)
+            await session.commit()
+            
+            # Agar chindan ham update bo'lsa (ya'ni boshqa operator ilib ketmagan bo'lsa)
+            if res.rowcount > 0:
                 phone.status = "assigned"
                 phone.operator_id = operator_id
-                phone.updated_at = datetime.utcnow()
-                await session.flush()
                 return phone
-            return None
+            else:
+                # Agar soniyaning mingdan bir qismida boshqa operator ilib ketgan bo'lsa, 
+                # xato bermasdan, avtomat keyingi raqamni topishga o'tadi (Kichik rekursiya)
+                return await get_number_for_operator(operator_id)
+                
+        return None
 
 async def check_booking_conflict(target_time: datetime) -> bool:
     async with AsyncSessionLocal() as session:
